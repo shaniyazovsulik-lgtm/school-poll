@@ -226,8 +226,14 @@ async function startServer() {
 
                 p.responses.push({ key, surname, name, cls, answers: ans, ts: Date.now() });
                 await p.save();
-                bcast({ type: 'update', id: p.id });
-                return J(res, 200, p.mode === 'test' ? { ok: 1, result: evaluate(p, ans) } : { ok: 1 });
+                
+                
+                const responseData = p.mode === 'test' ? { ok: 1, result: evaluate(p, ans) } : { ok: 1 };
+                J(res, 200, responseData);
+                
+                
+                setImmediate(() => bcast({ type: 'update', id: p.id }));
+                return;
             }
 
             J(res, 404, { error: 'Не найдено' });
