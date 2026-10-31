@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Панель учителя</title>
+<style>
+:root{--bg:#f7f7f5;--card:#fff;--tx:#1d1d1b;--mu:#6b6b66;--ac:#2f6fed;--ln:#e2e2dd;--g:#2e9d5b;--y:#e0a21a;--r:#d9534f}
+@media (prefers-color-scheme:dark){:root{--bg:#17181a;--card:#222428;--tx:#ececea;--mu:#9a9a95;--ln:#34363b;--ac:#6b9bff}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px;max-width:820px;margin:0 auto}
+h1{font-size:20px;margin:4px 0 12px}h2{font-size:16px;margin:0 0 8px}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.tabs button,.btn{border:1px solid var(--ln);background:var(--card);color:var(--tx);padding:8px 12px;border-radius:8px;font:inherit;cursor:pointer}
+.tabs button.on,.btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:14px;margin-bottom:12px}
+input[type=text],input[type=password],select{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--ln);border-radius:8px;padding:8px 10px;width:100%;margin:4px 0}
+input[type=number]{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--ln);border-radius:8px;padding:6px 8px}
+.row{display:flex;gap:8px;margin:6px 0;align-items:center;flex-wrap:wrap}.row label{white-space:nowrap;font-size:14px}.row input[type=text]{flex:1;min-width:120px;margin:0}
+.mu{color:var(--mu);font-size:14px}.hide{display:none}.err{color:var(--r)}
+.bar{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:14px}.bar .l{width:44%}.bar .t{flex:1;height:16px;background:var(--bg);border-radius:8px;overflow:hidden}.bar .f{display:block;height:100%;background:var(--ac)}.bar .n{width:34px;text-align:right}
+.big{font-size:30px;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}.cell{overflow-wrap:anywhere;border:1px solid var(--ln);border-radius:10px;padding:8px;text-align:center}.num{font-size:22px;font-weight:700}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid var(--ln);color:var(--mu);margin-bottom:6px}
+.pic{max-width:100%;max-height:240px;border-radius:8px;display:block;margin:8px 0}
+.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px solid var(--ln);padding:5px 8px;text-align:left;white-space:nowrap}
+.live{font-size:13px;color:var(--mu);margin-left:auto}.live b{color:var(--g)}
+.qr{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.qr svg{width:200px;height:200px;border-radius:8px;border:1px solid var(--ln)}
+@media print{body *{visibility:hidden}.pa,.pa *{visibility:visible}.pa{position:absolute;left:0;top:0;width:100%;color:#000}}
+</style>
+</head>
+<body>
+<h1>Панель учителя</h1>
+<div id="login" class="card hide" style="max-width:420px">
+ <h2>Вход</h2>
+ <label class="mu">Фамилия Имя Отчество</label><input type="text" id="lf" autocomplete="name">
+ <label class="mu">Код доступа учителя</label><input type="password" id="lc">
+ <button class="btn pri" id="lgo">Войти</button> <span class="err" id="le"></span>
+</div>
+<div id="app" class="hide">
+ <div class="tabs"><button data-v="edit" class="on">Редактор опроса</button><button data-v="res">Результаты</button><span class="live" id="live"></span><button id="out">Выйти</button></div>
+ <section id="edit"></section><section id="res" class="hide"></section>
+</div>
+<script src="/qr.js"></script>
+<script>
+var $=function(i){return document.getElementById(i)},esc=function(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")};
+function st(k){try{return localStorage.getItem(k)||""}catch(e){return""}}function sv(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+var CUR=null,TK=st("tk"),ME=st("tf"),META=null,POLLS=[],D=null,RID=null,RD="",view="edit",ES=null,tmr=null;
+
+function api(p,m,b){return fetch(p,{method:m||"GET",headers:{"Content-Type":"application/json","X-Token":TK},body:b?JSON.stringify(b):undefined}).then(function(r){
+ if(r.status===401){logout();throw new Error("Требуется вход")}return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"Ошибка");return j})})}
+function logout(){TK="";sv("tk","");if(ES)ES.close();$("app").classList.add("hide");$("login").classList.remove("hide");$("lf").value=ME}
+$("out").onclick=logout;
+$("lgo").onclick=function(){fetch("/api/teacher/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fio:$("lf").value,code:$("lc").value})})
+ .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error);return j})}).then(function(j){TK=j.token;ME=j.fio;sv("tk",TK);sv("tf",ME);$("lc").value="";start()}).catch(function(e){$("le").textContent=e.message})};
+function start(){api("/api/meta").then(function(m){META=m;return api("/api/polls")}).then(function(p){POLLS=p;
+ $("login").classList.add("hide");$("app").classList.remove("hide");if(!D)newDraft();connect();render()}).catch(function(){})}
+function connect(){if(ES)ES.close();ES=new EventSource("/api/events?token="+TK);
+ ES.onopen=function(){$("live").innerHTML="<b>●</b> онлайн · "+esc(ME)};ES.onerror=function(){$("live").textContent="нет связи, переподключение…"};
+ ES.onmessage=function(e){var d=JSON.parse(e.data);if(d.type!=="update")return;clearTimeout(tmr);tmr=setTimeout(function(){api("/api/polls").then(function(p){POLLS=p;if(view==="res")renderRes();else renderEditSel()})},250)}}
+
+function defQs(){return[{k:"quiz",t:"Пример: сколько будет 2 + 2?",pts:1,o:[{l:"3",ok:false},{l:"4",ok:true},{l:"5",ok:false}]},{k:"choice",t:"Что было самым сложным?",o:[{l:"Теория"},{l:"Примеры"},{l:"Задачи"}]},{k:"text",t:"Хорошо ли учитель объяснил тему?",o:[]}]}
+function newDraft(){D={id:null,unit:META.units[0],topic:"",mode:"survey",scale:[],qs:defQs()}}
+function unitLabel(u){return/^\d+$/.test(u)?u+" классы":u}
+function classesOf(u){return META.classes.filter(function(c){return(+c.match(/^\d+/)[0]>=10?c:c.match(/^\d+/)[0])===u})}
+function okSet(q){return q.o.map(function(o,j){return o.ok?j:-1}).filter(function(j){return j>=0})}
+function same(a,b){a=(a||[]).slice().sort();b=b.slice().sort();return a.length===b.length&&a.every(function(x,i){return x===b[i]})}
+function frac(q,a){if(q.k==="quiz")return same(a,okSet(q))?1:0;var n=q.left.length,k=0;q.left.forEach(function(x,j){if(a&&a[j]===x.c)k++});return q.partial===false?(k===n?1:0):k/n}
+function graded(q){return q.k==="quiz"||q.k==="match"}
+function pct(r,qs){var t=0,k=0,w;qs.forEach(function(q,i){if(!graded(q))return;w=(CUR&&CUR.mode==="test")?(q.pts==null?1:q.pts):1;t+=w;k+=w*frac(q,r.answers[i])});return t?k/t*100:null}
+function avg(rows,qs){var s=0,n=0;rows.forEach(function(r){var p=pct(r,qs);if(p!==null){s+=p;n++}});return n?Math.round(s/n):null}
+function colr(a){return a===null?"var(--mu)":a>=70?"var(--g)":a>=45?"var(--y)":"var(--r)"}
+function shrink(f,cb){var r=new FileReader();r.onload=function(){var im=new Image();im.onload=function(){var s=Math.min(1,900/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);c.getContext("2d").drawImage(im,0,0,c.width,c.height);cb(c.toDataURL("image/jpeg",0.8))};im.src=r.result};r.readAsDataURL(f)}
+
+document.querySelectorAll(".tabs button[data-v]").forEach(function(b){b.onclick=function(){view=b.dataset.v;render()}});
+function render(){["edit","res"].forEach(function(x){$(x).classList.toggle("hide",x!==view)});
+ document.querySelectorAll(".tabs button[data-v]").forEach(function(b){b.classList.toggle("on",b.dataset.v===view)});
+ if(view==="edit")renderEdit();else renderRes()}
+
+function maxPts(qs){var s=0;qs.forEach(function(q){if(q.k==="quiz"||q.k==="match")s+=(q.pts==null?1:Number(q.pts)||0)});return Math.round(s*100)/100}
+function defScale(){var m=maxPts(D.qs),c=function(f){return Math.ceil(m*f*2)/2};return[{min:c(0.85),grade:"5"},{min:c(0.65),grade:"4"},{min:c(0.45),grade:"3"},{min:0,grade:"2"}]}
+function scaleHtml(){if(D.mode!=="test")return"";
+ var h='<div class="card"><h2>Шкала оценок</h2><p class="mu">Максимум за тест: <b class="mx">'+maxPts(D.qs)+'</b> баллов. Ученик получает оценку по самому высокому порогу, который он набрал. Добавьте порог «от 0 баллов», чтобы оценка была у всех.</p>';
+ D.scale.forEach(function(r,i){h+='<div class="row"><label>от <input type="number" class="sm" data-i="'+i+'" min="0" step="0.5" value="'+r.min+'" style="width:90px"> баллов → оценка</label><input type="text" class="sg" data-i="'+i+'" value="'+esc(r.grade)+'" style="max-width:90px"><button class="btn" data-sdel="'+i+'">×</button></div>'});
+ return h+'<button class="btn" data-sadd="1">+ порог</button> <button class="btn" data-sdef="1">Заполнить по умолчанию (85 / 65 / 45 %)</button></div>'}
+function evalR(r,P){var s=0,mx=0;P.qs.forEach(function(q,i){if(!graded(q))return;var w=q.pts==null?1:q.pts;mx+=w;s+=w*frac(q,r.answers[i])});s=Math.round(s*100)/100;mx=Math.round(mx*100)/100;
+ var sc=(P.scale||[]).slice().sort(function(a,b){return b.min-a.min}),g="—";for(var i=0;i<sc.length;i++)if(s>=sc[i].min-1e-9){g=sc[i].grade;break}return{s:s,max:mx,g:g}}
+function gradesHtml(rows){if(!CUR||CUR.mode!=="test")return"";var sc=(CUR.scale||[]).slice().sort(function(a,b){return b.min-a.min}),cnt={},tot=0,mx=0;
+ rows.forEach(function(r){var e=evalR(r,CUR);cnt[e.g]=(cnt[e.g]||0)+1;tot+=e.s;mx=e.max});
+ var h='<p class="mu" style="margin:12px 0 2px"><b>Оценки</b>'+(rows.length?" · средний балл "+(Math.round(tot/rows.length*100)/100)+" из "+mx:"")+'</p>',seen={};
+ sc.forEach(function(r){if(seen[r.grade])return;seen[r.grade]=1;h+=bar("Оценка "+r.grade,cnt[r.grade]||0,rows.length)});
+ if(cnt["—"])h+=bar("Без оценки",cnt["—"],rows.length);return h}
+/* ---------- редактор ---------- */
+var KIND={quiz:"С правильными ответами · входит в статистику",match:"Соответствие · входит в статистику",choice:"Дополнительный · с вариантами",text:"Дополнительный · свободный ответ"};
+function renderEditSel(){var s=$("sel");if(!s)return;var v=D.id||"";s.innerHTML='<option value="">— новый опрос —</option>'+POLLS.map(function(p){return'<option value="'+p.id+'"'+(p.id===v?" selected":"")+'>'+esc(unitLabel(p.unit)+" · "+(p.topic||"без темы"))+'</option>'}).join("")}
+function renderEdit(){
+ var h='<div class="card"><h2>Опрос</h2><select id="sel"></select><label class="mu">Для кого опрос</label><select id="un">'+META.units.map(function(u){return'<option value="'+esc(u)+'"'+(u===D.unit?" selected":"")+'>'+esc(unitLabel(u))+'</option>'}).join("")+'</select>'+
+ '<p class="mu">'+(/^\d+$/.test(D.unit)?"Опрос смогут пройти классы параллели: "+esc(classesOf(D.unit).join(", ")):"10–11 классы настраиваются отдельно по профилям")+'</p>'+
+ '<label class="mu">Тема урока</label><input type="text" id="tp" placeholder="Например: Квадратные уравнения" value="'+esc(D.topic)+'"></div>'+
+ '<div class="card"><h2>Режим</h2><select id="md"><option value="survey"'+(D.mode!=="test"?" selected":"")+'>Опрос (без оценки)</option><option value="test"'+(D.mode==="test"?" selected":"")+'>Тест (на оценку)</option></select>'+
+ '<p class="mu">'+(D.mode==="test"?"Тест: у вопросов с правильными ответами есть цена в баллах, ученик сразу увидит баллы, оценку и разбор ответов. Дополнительные вопросы не оцениваются.":"Опрос: ученик видит только «Спасибо», учитель получает статистику понимания темы. Оценок нет.")+'</p></div>';
+ D.qs.forEach(function(q,qi){h+='<div class="card"><span class="tag">'+KIND[q.k]+'</span><input type="text" class="qt" data-qi="'+qi+'" value="'+esc(q.t)+'">'+(D.mode==="test"&&(q.k==="quiz"||q.k==="match")?'<div class="row"><label>Цена вопроса, баллов <input type="number" class="pt" data-qi="'+qi+'" min="0" step="0.5" value="'+(q.pts==null?1:q.pts)+'" style="width:80px"></label></div>':"")+
+  (q.img?'<img class="pic" src="'+q.img+'" alt="">':"")+'<div class="row"><label class="btn" style="cursor:pointer">'+(q.img?"Заменить фото":"+ Фото")+'<input type="file" accept="image/*" class="ph" data-qi="'+qi+'" hidden></label>'+(q.img?'<button class="btn" data-rmimg="'+qi+'">Убрать фото</button>':"")+'</div>';
+  q.o.forEach(function(o,oi){h+='<div class="row">'+(q.k==="quiz"?'<label><input type="checkbox" class="ok" data-qi="'+qi+'" data-oi="'+oi+'"'+(o.ok?" checked":"")+'> верный</label>':"")+'<input type="text" class="ol" data-qi="'+qi+'" data-oi="'+oi+'" value="'+esc(o.l)+'"><button class="btn" data-del="'+qi+','+oi+'">×</button></div>'});
+  if(q.k!=="text"&&q.k!=="match")h+='<button class="btn" data-add="'+qi+'">+ вариант</button> ';h+=(q.k==="match"?matchHtml(q,qi):"")+'<button class="btn" data-dq="'+qi+'">Удалить вопрос</button></div>'});
+ h+='<div class="card"><h2>Добавить вопрос</h2><button class="btn" data-nq="quiz">+ С правильными ответами</button> <button class="btn" data-nq="match">+ Соответствие</button> <button class="btn" data-nq="choice">+ Доп. с вариантами</button> <button class="btn" data-nq="text">+ Доп. свободный ответ</button>'+
+ '<p class="mu">Только вопросы с правильными ответами считаются в проценте «понимания» темы. Если у опроса уже есть ответы и вы меняете число вопросов или вариантов, текущие ответы переносятся в архив.</p></div>'+
+ scaleHtml()+'<button class="btn pri" id="save">Сохранить и получить QR-код</button> <span class="err" id="se"></span>';
+ $("edit").innerHTML=h;renderEditSel()}
+$("edit").addEventListener("input",function(e){var t=e.target;if(t.id==="tp")D.topic=t.value;
+ if(t.classList.contains("qt"))D.qs[t.dataset.qi].t=t.value;if(t.classList.contains("ol"))D.qs[t.dataset.qi].o[t.dataset.oi].l=t.value});
+$("edit").addEventListener("change",function(e){var t=e.target;
+ if(t.id==="sel"){var p=POLLS.filter(function(x){return x.id===t.value})[0];D=p?JSON.parse(JSON.stringify({id:p.id,unit:p.unit,topic:p.topic,mode:p.mode||"survey",scale:p.scale||[],qs:p.qs})):(newDraft(),D);renderEdit()}
+ if(t.id==="un")D.unit=t.value,renderEdit();
+ if(t.classList.contains("ok"))D.qs[t.dataset.qi].o[t.dataset.oi].ok=t.checked;
+ if(t.classList.contains("ph")&&t.files[0])shrink(t.files[0],function(u){D.qs[t.dataset.qi].img=u;renderEdit()})});
+$("edit").addEventListener("click",function(e){var t=e.target,d=t.dataset;
+ if(d.nq==="match")D.qs.push(newMatch());else if(d.nq)D.qs.push({k:d.nq,t:"Новый вопрос",o:d.nq==="text"?[]:d.nq==="quiz"?[{l:"Вариант 1",ok:true},{l:"Вариант 2",ok:false}]:[{l:"Да"},{l:"Нет"}]});
+ else if(d.add)D.qs[d.add].o.push({l:"Вариант",ok:false});
+ else if(d.del){var a=d.del.split(",");if(D.qs[a[0]].o.length>2)D.qs[a[0]].o.splice(a[1],1);else return}
+ else if(d.dq)D.qs.splice(d.dq,1);else if(d.rmimg)delete D.qs[d.rmimg].img;
+ else if(t.id==="save"){t.disabled=true;api("/api/polls","POST",D).then(function(p){D.id=p.id;RID=p.id;return api("/api/polls")}).then(function(l){POLLS=l;view="res";render()}).catch(function(er){t.disabled=false;$("se").textContent=er.message})}
+ else return;
+ renderEdit()});
+
+$("edit").addEventListener("input",function(e){var t=e.target,v;
+ if(t.classList.contains("pt")){v=parseFloat(String(t.value).replace(",","."));D.qs[t.dataset.qi].pts=isFinite(v)&&v>=0?v:1;var m=document.querySelector("#edit .mx");if(m)m.textContent=maxPts(D.qs)}
+ if(t.classList.contains("sm")){v=parseFloat(String(t.value).replace(",","."));D.scale[t.dataset.i].min=isFinite(v)?v:0}
+ if(t.classList.contains("sg"))D.scale[t.dataset.i].grade=t.value});
+$("edit").addEventListener("change",function(e){if(e.target.id==="md"){D.mode=e.target.value;if(D.mode==="test"&&!D.scale.length)D.scale=defScale();renderEdit()}});
+$("edit").addEventListener("click",function(e){var d=e.target.dataset;
+ if(d.sadd){D.scale.push({min:0,grade:""});renderEdit()}
+ else if(d.sdel){D.scale.splice(d.sdel,1);renderEdit()}
+ else if(d.sdef){D.scale=defScale();renderEdit()}});
+
+function newMatch(){return{k:"match",t:"Установите соответствие",pts:1,partial:true,o:[],left:[{l:"Элемент 1",c:0},{l:"Элемент 2",c:1}],right:[{l:"Вариант A"},{l:"Вариант B"},{l:"Вариант C"}]}}
+function matchHtml(q,qi){
+ var h='<div class="row"><label><input type="checkbox" class="mp" data-qi="'+qi+'"'+(q.partial!==false?" checked":"")+'> баллы за каждую верную пару (частично)</label></div>';
+ h+='<p class="mu" style="margin:8px 0 2px"><b>Слева</b>: элемент и его правильный ответ из правой колонки</p>';
+ q.left.forEach(function(x,j){h+='<div class="row"><input type="text" class="ml" data-qi="'+qi+'" data-j="'+j+'" value="'+esc(x.l)+'"><span class="mu">→</span><select class="mc" data-qi="'+qi+'" data-j="'+j+'" style="max-width:220px">'+q.right.map(function(r,k){return'<option value="'+k+'"'+(x.c===k?" selected":"")+'>'+(k+1)+". "+esc(r.l)+'</option>'}).join("")+'</select><button class="btn" data-mdl="'+qi+','+j+'">×</button></div>'});
+ h+='<button class="btn" data-mal="'+qi+'">+ слева</button><p class="mu" style="margin:12px 0 2px"><b>Справа</b>: варианты ответа (можно добавить лишние или, наоборот, меньше, чем слева)</p>';
+ q.right.forEach(function(r,k){h+='<div class="row"><span class="mu">'+(k+1)+'.</span><input type="text" class="mr" data-qi="'+qi+'" data-k="'+k+'" value="'+esc(r.l)+'"><button class="btn" data-mdr="'+qi+','+k+'">×</button></div>'});
+ return h+'<button class="btn" data-mar="'+qi+'">+ справа</button> '}
+function matchStats(q,qi,rows){var full=rows.filter(function(r){return frac(q,r.answers[qi])===1}).length,h='<div class="mu">Все пары верно: '+full+" из "+rows.length+(rows.length?" ("+Math.round(full/rows.length*100)+"%)":"")+"</div>";
+ q.left.forEach(function(x,j){var n=rows.filter(function(r){return r.answers[qi]&&r.answers[qi][j]===x.c}).length;h+=bar("✓ "+x.l+" → "+(q.right[x.c]?q.right[x.c].l:"?"),n,rows.length);
+  var w={};rows.forEach(function(r){var a=r.answers[qi]&&r.answers[qi][j];if(a!==undefined&&a!==x.c)w[a]=(w[a]||0)+1});
+  var top=Object.keys(w).sort(function(a,b){return w[b]-w[a]})[0];if(top!==undefined&&q.right[top])h+='<div class="mu" style="margin:-2px 0 4px 6px">чаще всего выбирали: '+esc(q.right[top].l)+' ('+w[top]+')</div>'});
+ return h}
+$("edit").addEventListener("input",function(e){var t=e.target;
+ if(t.classList.contains("ml"))D.qs[t.dataset.qi].left[t.dataset.j].l=t.value;
+ if(t.classList.contains("mr")){D.qs[t.dataset.qi].right[t.dataset.k].l=t.value;var k=+t.dataset.k;document.querySelectorAll('#edit .mc[data-qi="'+t.dataset.qi+'"] option[value="'+k+'"]').forEach(function(o){o.textContent=(k+1)+". "+t.value})}});
+$("edit").addEventListener("change",function(e){var t=e.target,q=t.dataset.qi!=null?D.qs[t.dataset.qi]:null;
+ if(t.classList.contains("mc"))q.left[t.dataset.j].c=+t.value;
+ if(t.classList.contains("mp"))q.partial=t.checked;});
+$("edit").addEventListener("click",function(e){var d=e.target.dataset,q;
+ if(d.mal){D.qs[d.mal].left.push({l:"Новый элемент",c:0});renderEdit()}
+ else if(d.mar){D.qs[d.mar].right.push({l:"Новый вариант"});renderEdit()}
+ else if(d.mdl){var a=d.mdl.split(",");q=D.qs[a[0]];if(q.left.length>2){q.left.splice(a[1],1);renderEdit()}}
+ else if(d.mdr){var b=d.mdr.split(",");q=D.qs[b[0]];if(q.right.length>2){var k=+b[1];q.right.splice(k,1);q.left.forEach(function(x){if(x.c===k)x.c=0;else if(x.c>k)x.c--});renderEdit()}}});
+
+/* ---------- результаты ---------- */
+function cell(t,rows,qs){var a=avg(rows,qs);return'<div class="cell"><div class="mu">'+esc(t)+'</div><div class="num" style="color:'+colr(a)+'">'+(a===null?"—":a+"%")+'</div><div class="mu">ответов: '+rows.length+'</div></div>'}
+function bar(l,n,tot){var p=tot?Math.round(n/tot*100):0;return'<div class="bar"><span class="l">'+esc(l)+'</span><span class="t"><span class="f" style="width:'+p+'%"></span></span><span class="n">'+n+'</span></div>'}
+function block(title,rows,qs){var a=avg(rows,qs),h='<div class="card"><h2>'+esc(title)+' <span class="mu">· ответов: '+rows.length+'</span></h2><div class="big" style="color:'+colr(a)+'">'+(a===null?"—":a+"%")+'</div><div class="mu">'+(CUR&&CUR.mode==="test"?"средний результат (% от максимума баллов)":"среднее понимание темы (по вопросам с правильными ответами)")+'</div>'+gradesHtml(rows);
+ qs.forEach(function(q,qi){h+='<p class="mu" style="margin:14px 0 2px"><b>'+esc(q.t)+'</b></p>';
+  if(q.k==="match"){h+=matchStats(q,qi,rows);return}
+  if(q.k==="text"){var an=rows.map(function(r){return r.answers[qi]}).filter(Boolean);h+=an.length?'<div class="mu">'+an.slice(-8).map(function(s){return"— "+esc(s)}).join("<br>")+"</div>":'<div class="mu">Пока нет ответов</div>';return}
+  if(q.k==="quiz"){var k=rows.filter(function(r){return same(r.answers[qi],okSet(q))}).length;h+='<div class="mu">Полностью верно: '+k+" из "+rows.length+(rows.length?" ("+Math.round(k/rows.length*100)+"%)":"")+"</div>"}
+  q.o.forEach(function(o,oi){var n=rows.filter(function(r){return q.k==="quiz"?(r.answers[qi]||[]).indexOf(oi)>=0:r.answers[qi]===oi}).length;h+=bar((q.k==="quiz"&&o.ok?"✓ ":"")+o.l,n,rows.length)})});
+ return h+"</div>"}
+function link(p){return(($("base")&&$("base").value)||location.origin).replace(/\/+$/,"")+"/?p="+p.id}
+function renderRes(){
+ if(!POLLS.length){$("res").innerHTML='<div class="card">Опросов пока нет. Создайте первый во вкладке «Редактор опроса».</div>';return}
+ var P=POLLS.filter(function(x){return x.id===RID})[0]||POLLS[0];RID=P.id;CUR=P;
+ var keepBase=$("base")?$("base").value:location.origin,keepFocus=document.activeElement&&document.activeElement.id==="base";
+ var cls=classesOf(P.unit),qs=P.qs,rows=P.responses;
+ var h='<div class="card"><h2>Опрос</h2><select id="rs">'+POLLS.map(function(p){return'<option value="'+p.id+'"'+(p.id===P.id?" selected":"")+'>'+esc(unitLabel(p.unit)+" · "+(p.topic||"без темы")+(p.open?"":" (закрыт)"))+'</option>'}).join("")+'</select>'+
+ '<div class="row" style="margin-top:10px"><button class="btn" data-act="toggle">'+(P.open?"Закрыть приём ответов":"Открыть приём ответов")+'</button><button class="btn" data-act="reset">Перезапустить (в архив)</button><button class="btn" data-act="del">Удалить опрос</button></div>'+
+ '<p class="mu">'+(P.mode==="test"?"Тест (на оценку)":"Опрос (без оценки)")+' · Статус: '+(P.open?"принимает ответы":"закрыт")+" · автор: "+esc(P.by||"")+" · в архиве запусков: "+(P.archive||[]).length+'</p></div>';
+ var url=link(P);
+ h+='<div class="card pa"><h2>Ссылка и QR-код для учеников</h2><div class="qr"><div id="qrsvg"></div><div style="flex:1;min-width:200px"><b>'+esc(unitLabel(P.unit))+"</b><br>"+esc(P.topic||"")+'<p class="mu" id="lk" style="word-break:break-all">'+esc(url)+'</p>'+
+ '<div class="hide-print"><label class="mu">Адрес сервера в школьной сети (его вводят в QR)</label><input type="text" id="base" value="'+esc(keepBase)+'"><div class="row"><button class="btn" data-act="copy">Копировать ссылку</button><button class="btn" data-act="png">Скачать PNG</button><button class="btn" data-act="print">Печать</button></div></div></div></div></div>';
+ var G=["__all"].concat(cls);if(RD&&G.indexOf(RD)<0)RD="";
+ h+='<div class="card"><h2>'+(P.mode==="test"?"Результаты по классам (% от максимума баллов)":"Понимание темы по классам")+'</h2><div class="grid">'+cell("Вся параллель",rows,qs)+cls.map(function(c){return cell(c,rows.filter(function(r){return r.cls===c}),qs)}).join("")+'</div></div>'+
+ '<div class="card"><h2>Подробно</h2><select id="rd"><option value="">Вся параллель</option>'+cls.map(function(c){return'<option'+(c===RD?" selected":"")+'>'+esc(c)+'</option>'}).join("")+'</select></div>'+
+ block(RD||unitLabel(P.unit),RD?rows.filter(function(r){return r.cls===RD}):rows,qs);
+ var list=(RD?rows.filter(function(r){return r.cls===RD}):rows).slice().sort(function(a,b){return b.ts-a.ts});
+ h+='<div class="card"><h2>Кто ответил <span class="mu">· '+list.length+'</span></h2><div class="wrap"><table><tr><th>ФИО</th><th>Класс</th>'+(CUR.mode==="test"?"<th>Баллы</th><th>Оценка</th>":"<th>Верно</th>")+'<th>Время</th></tr>'+
+ list.map(function(r){var p=pct(r,qs);return"<tr><td>"+esc(r.surname+" "+r.name)+"</td><td>"+esc(r.cls)+"</td><td>"+(CUR.mode==="test"?(function(){var e=evalR(r,CUR);return e.s+" из "+e.max+"</td><td>"+esc(e.g)})():(p===null?"—":Math.round(p)+"%"))+"</td><td>"+new Date(r.ts).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})+"</td></tr>"}).join("")+'</table></div></div>';
+ $("res").innerHTML=h;drawQR(url);if(keepFocus){var b=$("base");b.focus();b.setSelectionRange(b.value.length,b.value.length)}}
+function drawQR(url){try{$("qrsvg").innerHTML=QR.svg(url,6)}catch(e){$("qrsvg").textContent=e.message}}
+$("res").addEventListener("input",function(e){if(e.target.id==="base"){var P=POLLS.filter(function(x){return x.id===RID})[0],u=link(P);$("lk").textContent=u;drawQR(u)}});
+$("res").addEventListener("change",function(e){if(e.target.id==="rs"){RID=e.target.value;RD="";renderRes()}if(e.target.id==="rd"){RD=e.target.value;renderRes()}});
+$("res").addEventListener("click",function(e){var a=e.target.dataset.act;if(!a)return;var P=POLLS.filter(function(x){return x.id===RID})[0];
+ if(a==="toggle")api("/api/polls/"+P.id+"/status","POST",{open:!P.open});
+ if(a==="reset"&&confirm("Перезапустить опрос? Текущие ответы будут перенесены в архив, статистика обнулится."))api("/api/polls/"+P.id+"/reset","POST",{});
+ if(a==="del"&&confirm("Удалить опрос вместе со всеми ответами?")){api("/api/polls/"+P.id,"DELETE");RID=null}
+ if(a==="copy"){var u=link(P);if(navigator.clipboard)navigator.clipboard.writeText(u);else prompt("Скопируйте ссылку",u)}
+ if(a==="png"){var c=QR.canvas(link(P),10),l=document.createElement("a");l.download="qr-"+P.unit.replace(/\s+/g,"_")+".png";l.href=c.toDataURL("image/png");l.click()}
+ if(a==="print")window.print()});
+if(TK)start();else{$("login").classList.remove("hide");$("lf").value=ME}
+</script>
+</body>
+</html>
