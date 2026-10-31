@@ -13,6 +13,8 @@ const pollSchema = new mongoose.Schema({
     unit: { type: String, required: true },
     topic: { type: String, required: true },
     open: { type: Boolean, default: true },
+    mode: { type: String, default: 'survey' },
+    scale: { type: Array, default: [] },
     by: { type: String, required: true },
     created: { type: Number, required: true },
     qs: { type: Array, required: true },
@@ -49,16 +51,65 @@ const str = (s, m) => String(s == null ? '' : s).trim().slice(0, m);
 function cleanQs(qs) {
     if (!Array.isArray(qs) || qs.length > 40) throw new Error('Некорректные вопросы');
     return qs.map(q => {
-        if (!['quiz', 'choice', 'text'].includes(q.k)) throw new Error('Тип вопроса');
-        const o = q.k === 'text' ? [] : (Array.isArray(q.o) ? q.o : []).slice(0, 12).map(x => ({ l: str(x.l, 200), ok: q.k === 'quiz' && !!x.ok }));
-        if (q.k !== 'text' && o.length < 2) throw new Error('Нужно минимум 2 варианта');
+        if (!['quiz', 'choice', 'text', 'match'].includes(q.k)) throw new Error('Тип вопроса');
+        const o = (q.k === 'text' || q.k === 'match') ? [] : (Array.isArray(q.o) ? q.o : []).slice(0, 12).map(x => ({ l: str(x.l, 200), ok: q.k === 'quiz' && !!x.ok }));
+        if (q.k !== 'text' && q.k !== 'match' && o.length < 2) throw new Error('Нужно минимум 2 варианта');
         const r = { k: q.k, t: str(q.t, 500), o };
+        if (q.k === 'quiz' || q.k === 'match') { let pts = Number(String(q.pts == null ? 1 : q.pts).replace(',', '.')); if (!isFinite(pts) || pts < 0) pts = 1; r.pts = Math.min(1000, Math.round(pts * 100) / 100); }
+        if (q.k === 'match') {
+            const Lf = Array.isArray(q.left) ? q.left : [], Rt = Array.isArray(q.right) ? q.right : [];
+            if (Lf.length < 2 || Lf.length > 12 || Rt.length < 2 || Rt.length > 12) throw new Error('В вопросе на соответствие нужно от 2 до 12 элементов в каждой колонке');
+            r.right = Rt.map(x => { const l = str(x && x.l, 200); if (!l) throw new Error('Заполните все элементы соответствия'); return { l }; });
+            r.left = Lf.map(x => { const l = str(x && x.l, 200), c = Number(x && x.c); if (!l) throw new Error('Заполните все элементы соответствия'); if (!Number.isInteger(c) || c < 0 || c >= r.right.length) throw new Error('Для каждого элемента слева выберите правильный ответ справа'); return { l, c }; });
+            r.partial = q.partial !== false;
+        }
         if (typeof q.img === 'string' && /^data:image\/(jpeg|png|webp|gif);base64,/.test(q.img) && q.img.length < 4e6) r.img = q.img;
         return r;
     });
 }
-const sig = qs => JSON.stringify(qs.map(q => [q.k, q.o.length]));
-const pub = p => ({ id: p.id, unit: p.unit, topic: p.topic, open: p.open, classes: classesOf(p.unit), qs: p.qs.map(q => ({ k: q.k, t: q.t, img: q.img, o: q.o.map(x => ({ l: x.l })) })) });
+const sig = qs => JSON.stringify(qs.map(q => [q.k, q.o.length, (q.left || []).length, (q.right || []).length]));
+const okSet = q => q.o.map((o, j) => o.ok ? j : -1).filter(j => j >= 0);
+const sameSet = (a, b) => { a = [...(a || [])].sort((x, y) => x - y); b = [...b].sort((x, y) => x - y); return a.length === b.length && a.every((x, i) => x === b[i]); };
+const r2 = x => Math.round(x * 100) / 100;
+function checkTest(qs) {
+    const quiz = qs.filter(q => q.k === 'quiz' || q.k === 'match');
+    if (!quiz.length) throw new Error('В тесте нужен хотя бы один вопрос с правильными ответами');
+    if (quiz.some(q => q.k === 'quiz' && !okSet(q).length)) throw new Error('Отметьте верный ответ в каждом вопросе с правильными ответами');
+    if (!(quiz.reduce((s, q) => s + q.pts, 0) > 0)) throw new Error('Сумма баллов теста должна быть больше нуля');
+}
+function cleanScale(s) {
+    if (!Array.isArray(s) || !s.length || s.length > 12) throw new Error('Задайте шкалу оценок (от 1 до 12 порогов)');
+    const out = s.map(x => {
+        const min = Number(String(x.min).replace(',', '.')), grade = str(x.grade, 10);
+        if (!isFinite(min) || min < 0 || min > 1000) throw new Error('Порог шкалы: число баллов от 0');
+        if (!grade) throw new Error('Укажите оценку для каждого порога шкалы');
+        return { min: r2(min), grade };
+    });
+    if (new Set(out.map(x => x.min)).size !== out.length) throw new Error('В шкале повторяются пороги');
+    return out.sort((a, b) => b.min - a.min);
+}
+function gradeFor(score, scale) { for (const r of (scale || []).slice().sort((a, b) => b.min - a.min)) if (score >= r.min - 1e-9) return r.grade; return '—'; }
+function fracOf(q, a) {
+    if (q.k === 'quiz') return sameSet(a, okSet(q)) ? 1 : 0;
+    const n = q.left.length; let k = 0;
+    q.left.forEach((x, j) => { if (a && a[j] === x.c) k++; });
+    return q.partial === false ? (k === n ? 1 : 0) : k / n;
+}
+function evaluate(p, answers) {
+    let score = 0, max = 0; const items = [];
+    p.qs.forEach((q, i) => {
+        if (q.k !== 'quiz' && q.k !== 'match') return;
+        const pts = q.pts == null ? 1 : q.pts, a = answers[i], f = fracOf(q, a);
+        max += pts; score += pts * f;
+        const it = { i, pts, got: r2(pts * f), ok: f === 1, yours: a };
+        if (q.k === 'quiz') it.correct = okSet(q);
+        else it.pairs = q.left.map((x, j) => ({ yours: a[j], correct: x.c, ok: a[j] === x.c }));
+        items.push(it);
+    });
+    score = r2(score); max = r2(max);
+    return { score, max, grade: gradeFor(score, p.scale), items };
+}
+const pub = p => ({ id: p.id, unit: p.unit, topic: p.topic, open: p.open, classes: classesOf(p.unit), mode: p.mode || 'survey', qs: p.qs.map(q => ({ k: q.k, t: q.t, img: q.img, pts: q.pts, left: q.left && q.left.map(x => ({ l: x.l })), right: q.right, o: q.o.map(x => ({ l: x.l })) })) });
 
 const FILES = { '/': 'student.html', '/teacher': 'teacher.html', '/qr.js': 'qr.js' };
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8' };
@@ -110,6 +161,9 @@ async function startServer() {
                 if (!need()) return; const b = await body(req);
                 if (!units.includes(b.unit)) return J(res, 400, { error: 'Неизвестный класс/параллель' });
                 const qs = cleanQs(b.qs); let p = b.id ? await Poll.findOne({ id: b.id }) : null;
+                const mode = b.mode === 'test' ? 'test' : 'survey';
+                let scale = [];
+                if (mode === 'test') { checkTest(qs); scale = cleanScale(b.scale); }
 
                 if (p) {
                     if (sig(p.qs) !== sig(qs) && p.responses.length) {
@@ -119,10 +173,12 @@ async function startServer() {
                     p.unit = b.unit;
                     p.topic = str(b.topic, 200);
                     p.qs = qs;
+                    p.mode = mode;
+                    p.scale = scale;
                     await p.save();
                 } else {
                     const id = crypto.randomBytes(5).toString('hex');
-                    p = await Poll.create({ id, unit: b.unit, topic: str(b.topic, 200), qs, open: true, by: teacher.fio, created: Date.now(), responses: [], archive: [] });
+                    p = await Poll.create({ id, unit: b.unit, topic: str(b.topic, 200), qs, mode, scale, open: true, by: teacher.fio, created: Date.now(), responses: [], archive: [] });
                 }
                 bcast({ type: 'update', id: p.id }); return J(res, 200, p);
             }
@@ -159,7 +215,8 @@ async function startServer() {
 
                 const ans = p.qs.map((q, i) => {
                     const a = b.answers[i];
-                    if (q.k === 'quiz') { if (!Array.isArray(a) || !a.length || a.some(x => !Number.isInteger(x) || x < 0 || x >= q.o.length)) throw new Error('Ответьте на все вопросы'); return [...new Set(a)].sort(); }
+                    if (q.k === 'quiz') { if (!Array.isArray(a) || !a.length || a.some(x => !Number.isInteger(x) || x < 0 || x >= q.o.length)) throw new Error('Ответьте на все вопросы'); return [...new Set(a)].sort((x, y) => x - y); }
+                    if (q.k === 'match') { if (!Array.isArray(a) || a.length !== q.left.length || a.some(x => !Number.isInteger(x) || x < 0 || x >= q.right.length)) throw new Error('Ответьте на все вопросы'); return a; }
                     if (q.k === 'choice') { if (!Number.isInteger(a) || a < 0 || a >= q.o.length) throw new Error('Ответьте на все вопросы'); return a; }
                     return str(a, 1000);
                 });
@@ -169,7 +226,8 @@ async function startServer() {
 
                 p.responses.push({ key, surname, name, cls, answers: ans, ts: Date.now() });
                 await p.save();
-                bcast({ type: 'update', id: p.id }); return J(res, 200, { ok: 1 });
+                bcast({ type: 'update', id: p.id });
+                return J(res, 200, p.mode === 'test' ? { ok: 1, result: evaluate(p, ans) } : { ok: 1 });
             }
 
             J(res, 404, { error: 'Не найдено' });
