@@ -126,7 +126,12 @@ async function startServer() {
     http.createServer(async (req, res) => {
         try {
             const u = new URL(req.url, 'http://x'), pn = u.pathname, m = req.method;
-            if (FILES[pn] && m === 'GET') { const f = path.join(DIR, FILES[pn]); res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)], 'Cache-Control': 'no-cache' }); return res.end(fs.readFileSync(f)); }
+            if (FILES[pn] && m === 'GET') { 
+    const f = path.join(DIR, FILES[pn]); 
+    const content = fs.readFileSync(f); 
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(f)], 'Cache-Control': 'no-cache' }); 
+    return res.end(content); 
+}
             if (!pn.startsWith('/api/')) return J(res, 404, { error: 'Не найдено' });
 
             const tok = req.headers['x-token'] || u.searchParams.get('token'), teacher = sessions.get(tok);
@@ -236,8 +241,12 @@ async function startServer() {
                 return;
             }
 
-            J(res, 404, { error: 'Не найдено' });
-        } catch (e) { J(res, 400, { error: e.message || 'Ошибка' }); }
+           J(res, 404, { error: 'Не найдено' });
+        } catch (e) { 
+            if (!res.headersSent) {
+                J(res, 400, { error: e.message || 'Ошибка' }); 
+            }
+        }
     }).listen(PORT, '0.0.0.0', () => {
         console.log('Сервер опросов с MongoDB запущен, порт ' + PORT);
     });
