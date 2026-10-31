@@ -1,4 +1,9 @@
 {
+  "name": "school-poll",
+  "version": "2.1.0",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=20.19.0" },
   "dependencies": {
     "mongoose": "^9.11.4"
   }
